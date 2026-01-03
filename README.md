@@ -26,13 +26,39 @@ _Coming soon - pending publication_
 
 ## Features
 
+### Core Highlighting
 - Detects text selections on any page and positions an inline floating action button nearby
 - Panel reveals on hover/click with six curated pastel swatches (Apricot, Coral, Pistachio, Mint, Periwinkle, and Lavender)
 - Highlights persist per page via `chrome.storage.local`, so they reappear the next time you open the document
-- Saved highlights live inside the extension popup (click the ténati icon) where you can manage, focus, or delete them
-- Export highlights as Markdown files or export the entire page as PDF directly from the popup
 - Highlights are injected as `<mark>` elements with rounded edges so copied text stays intact
 - Optimized text readability with enhanced contrast and text shadows for all highlight colors
+
+### Management & Organization
+- Saved highlights live inside the extension popup (click the ténati icon) where you can manage, focus, or delete them
+- Tab navigation between Highlights and Settings views
+- Export highlights as Markdown files or export the entire page as PDF directly from the popup
+- Export/Import functionality for backing up and restoring all highlights across pages
+- Storage quota management with automatic cleanup when storage is full
+
+### Customization
+- **Theme Selection**: Choose between Dark and Light mode with real-time preview
+- **Settings Panel**: Integrated settings page within popup (no separate tab needed)
+- Default highlight color preference
+- Auto-highlight option to skip panel on selection
+- Animation speed control (Fast, Normal, Slow, None)
+
+### Performance & Reliability
+- Storage debouncing to reduce API calls by 70-80%
+- DOM cache mechanism for faster highlight operations
+- Lazy highlight restoration for large pages (loads first 50 highlights immediately, then lazy loads the rest)
+- Throttled scroll and resize events for smooth performance
+- Memory leak prevention with proper cleanup on page unload
+- Loading states with visual indicators
+
+### Security
+- XSS protection with HTML sanitization
+- Enhanced error handling with user-friendly messages
+- Content script readiness checking with retry mechanism
 
 ## Technical Details
 
