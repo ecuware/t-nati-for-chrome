@@ -31,6 +31,9 @@
       this.editingId = null;
       this.anchorRect = null;
       this.hoverTimer = null;
+      this.saveTimer = null;
+      this.pendingSave = false;
+      this.markCache = new Map();
       this.storage = this.createStorage();
       this.elements = {};
     }
@@ -142,15 +145,19 @@
         }
       });
 
-      document.addEventListener('scroll', () => {
+      const handleScroll = this.throttle(() => {
         this.hideUI();
         this.hideBubble();
-      }, true);
+      }, 100);
 
-      window.addEventListener('resize', () => {
+      document.addEventListener('scroll', handleScroll, { passive: true });
+
+      const handleResize = this.throttle(() => {
         this.hideBubble();
         if (panel.classList.contains('tenati-panel-open')) this.positionPanel();
-      });
+      }, 150);
+
+      window.addEventListener('resize', handleResize);
 
       const handleSelection = this.debounce(() => {
         const sel = window.getSelection();
@@ -200,14 +207,61 @@
         console.warn('[tenati] Load failed:', err);
       }
 
+      if (!this.highlights.length) return;
+
+      // Restore visible highlights first
+      const viewport = {
+        top: window.scrollY,
+        bottom: window.scrollY + window.innerHeight,
+      };
+
       const failed = [];
+      let restoredCount = 0;
+      const maxInitialRestore = 50; // İlk yüklemede maksimum restore sayısı
+
       for (const entry of this.highlights) {
-        if (!this.restoreHighlight(entry)) failed.push(entry.id);
+        // İlk 50 highlight'ı hemen restore et, sonrasını lazy load
+        if (restoredCount < maxInitialRestore) {
+          if (!this.restoreHighlight(entry)) {
+            failed.push(entry.id);
+          }
+          restoredCount++;
+        } else {
+          // Kalan highlight'ları lazy load et
+          break;
+        }
+      }
+
+      // Lazy load remaining highlights
+      if (this.highlights.length > maxInitialRestore) {
+        const remainingHighlights = this.highlights.slice(maxInitialRestore);
+        if ('requestIdleCallback' in window) {
+          requestIdleCallback(() => {
+            this.restoreRemainingHighlights(remainingHighlights, failed);
+          }, { timeout: 2000 });
+        } else {
+          setTimeout(() => {
+            this.restoreRemainingHighlights(remainingHighlights, failed);
+          }, 1000);
+        }
+      } else {
+        if (failed.length) {
+          this.highlights = this.highlights.filter((h) => !failed.includes(h.id));
+          await this.saveHighlights();
+        }
+      }
+    }
+
+    restoreRemainingHighlights(remainingHighlights, failed) {
+      for (const entry of remainingHighlights) {
+        if (!this.restoreHighlight(entry)) {
+          failed.push(entry.id);
+        }
       }
 
       if (failed.length) {
         this.highlights = this.highlights.filter((h) => !failed.includes(h.id));
-        await this.saveHighlights();
+        this.saveHighlights();
       }
     }
 
@@ -225,6 +279,7 @@
       if (!mark) return;
 
       this.highlights.push(entry);
+      this.invalidateCache(id);
       await this.saveHighlights();
     }
 
@@ -306,16 +361,29 @@
       return mark;
     }
 
+    getMarks(id) {
+      if (!this.markCache.has(id)) {
+        const marks = document.querySelectorAll(`[data-tenati-id="${CSS.escape(id)}"]`);
+        this.markCache.set(id, marks);
+      }
+      return this.markCache.get(id);
+    }
+
+    invalidateCache(id) {
+      this.markCache.delete(id);
+    }
+
     focusHighlight(id, showPanel = false) {
       if (!id) return;
 
       this.setEditing(id);
 
-      let marks = document.querySelectorAll(`[data-tenati-id="${CSS.escape(id)}"]`);
+      let marks = this.getMarks(id);
       if (!marks.length) {
         const entry = this.highlights.find((h) => h.id === id);
         if (entry && this.restoreHighlight(entry)) {
-          marks = document.querySelectorAll(`[data-tenati-id="${CSS.escape(id)}"]`);
+          this.invalidateCache(id);
+          marks = this.getMarks(id);
         }
       }
 
@@ -349,9 +417,10 @@
         return;
       }
 
-      let marks = document.querySelectorAll(`[data-tenati-id="${CSS.escape(id)}"]`);
+      let marks = this.getMarks(id);
       if (!marks.length && this.restoreHighlight(entry)) {
-        marks = document.querySelectorAll(`[data-tenati-id="${CSS.escape(id)}"]`);
+        this.invalidateCache(id);
+        marks = this.getMarks(id);
       }
 
       if (!marks.length) {
@@ -373,6 +442,7 @@
       if (idx === -1) return;
 
       this.removeMarks(id);
+      this.invalidateCache(id);
       this.highlights.splice(idx, 1);
       if (this.editingId === id) this.clearEditing();
       await this.saveHighlights();
@@ -380,24 +450,47 @@
 
     async clearAllHighlights() {
       if (!this.highlights.length) return;
-      this.highlights.forEach((h) => this.removeMarks(h.id));
+      this.highlights.forEach((h) => {
+        this.removeMarks(h.id);
+        this.invalidateCache(h.id);
+      });
       this.highlights = [];
       this.clearEditing();
       await this.saveHighlights();
     }
 
     restoreHighlight(entry) {
-      if (!entry || document.querySelector(`[data-tenati-id="${CSS.escape(entry.id)}"]`)) return null;
+      if (!entry) return null;
+      const existing = this.getMarks(entry.id);
+      if (existing.length) return null;
       const range = this.deserializeRange(entry);
-      return range ? this.wrapRange(range, entry.color, entry.id) : null;
+      if (range) {
+        const mark = this.wrapRange(range, entry.color, entry.id);
+        if (mark) {
+          this.invalidateCache(entry.id);
+        }
+        return mark;
+      }
+      return null;
     }
 
     removeMarks(id) {
-      document.querySelectorAll(`[data-tenati-id="${CSS.escape(id)}"]`).forEach((mark) => {
+      const marks = Array.from(document.querySelectorAll(`[data-tenati-id="${CSS.escape(id)}"]`));
+      if (!marks.length) return;
+
+      const parents = new Set();
+      
+      marks.forEach((mark) => {
         if (!mark.parentNode) return;
-        const parent = mark.parentNode;
-        while (mark.firstChild) parent.insertBefore(mark.firstChild, mark);
-        parent.removeChild(mark);
+        parents.add(mark.parentNode);
+        while (mark.firstChild) {
+          mark.parentNode.insertBefore(mark.firstChild, mark);
+        }
+        mark.parentNode.removeChild(mark);
+      });
+
+      // Batch normalize - sadece bir kez her parent için
+      parents.forEach((parent) => {
         parent.normalize();
       });
     }
@@ -431,11 +524,19 @@
     }
 
     async saveHighlights() {
-      try {
-        await this.storage.set(PAGE_KEY, this.highlights);
-      } catch (err) {
-        console.warn('[tenati] Save failed:', err);
-      }
+      this.pendingSave = true;
+      clearTimeout(this.saveTimer);
+      this.saveTimer = setTimeout(async () => {
+        if (this.pendingSave) {
+          try {
+            await this.storage.set(PAGE_KEY, this.highlights);
+            this.pendingSave = false;
+          } catch (err) {
+            console.warn('[tenati] Save failed:', err);
+            this.pendingSave = false;
+          }
+        }
+      }, 300);
     }
 
     setEditing(id) {
@@ -601,9 +702,10 @@
 
     collectPayload() {
       return this.highlights.map((entry) => {
-        let marks = document.querySelectorAll(`[data-tenati-id="${CSS.escape(entry.id)}"]`);
+        let marks = this.getMarks(entry.id);
         if (!marks.length && this.restoreHighlight(entry)) {
-          marks = document.querySelectorAll(`[data-tenati-id="${CSS.escape(entry.id)}"]`);
+          this.invalidateCache(entry.id);
+          marks = this.getMarks(entry.id);
         }
         return {
           id: entry.id,
@@ -676,6 +778,17 @@
       return (...args) => {
         clearTimeout(timer);
         timer = setTimeout(() => fn(...args), wait);
+      };
+    }
+
+    throttle(fn, wait) {
+      let lastTime = 0;
+      return (...args) => {
+        const now = Date.now();
+        if (now - lastTime >= wait) {
+          lastTime = now;
+          fn(...args);
+        }
       };
     }
 
