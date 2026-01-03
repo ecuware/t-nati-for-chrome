@@ -2,6 +2,10 @@
 
 A lightweight Chrome extension that surfaces a floating highlighter whenever you select text. Hover or click the capsule to open a modern panel with pastel tones, then apply the color to the selection.
 
+<img width="507" height="259" alt="{FF2FAB49-D10D-4CC7-8226-388FB829EA24}" src="https://github.com/user-attachments/assets/b64f1d17-b37c-4b7d-a8cb-de25304da1fb" />
+
+<img width="479" height="136" alt="{FCC2A2D9-97F8-4B5B-8ED1-7AB07C7D5FF9}" src="https://github.com/user-attachments/assets/1f5f920a-5de9-4693-827c-6e8de28c2dc1" />
+
 > **Note:** This is a Chrome Manifest v3 compatible port of the original [Firefox extension](https://github.com/bombardeenlima/t-nati) by [bombardeenlima](https://github.com/bombardeenlima).
 
 ## Installation
