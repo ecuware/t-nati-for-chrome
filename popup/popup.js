@@ -83,8 +83,12 @@ class PopupController {
     this.tabId = tab.id;
     this.tabUrl = tab.url || '';
     this.tabTitle = tab.title || '';
-    this.elements.urlLabel.textContent = this.formatUrl(this.tabUrl);
-    this.elements.exportPdfBtn.disabled = false;
+    if (this.elements.urlLabel) {
+      this.elements.urlLabel.textContent = this.formatUrl(this.tabUrl);
+    }
+    if (this.elements.exportPdfBtn) {
+      this.elements.exportPdfBtn.disabled = false;
+    }
 
     await this.refreshHighlights();
   }
@@ -93,10 +97,23 @@ class PopupController {
     if (!this.tabId) return;
 
     this.setStatus('statusLoading');
-    this.elements.list.hidden = true;
+    if (this.elements.list) {
+      this.elements.list.hidden = true;
+    }
 
     try {
+      // Check if content script is ready
+      const isReady = await this.checkContentScriptReady();
+      if (!isReady) {
+        this.setStatus('statusUnavailable');
+        this.disableAll();
+        return;
+      }
+
       const res = await this.sendCommand('getHighlights');
+      if (!res) {
+        throw new Error('No response from content script');
+      }
       this.highlights = Array.isArray(res?.highlights) ? res.highlights : [];
       this.renderList();
     } catch (err) {
@@ -108,20 +125,22 @@ class PopupController {
 
   renderList() {
     const { list, clearBtn, exportMdBtn } = this.elements;
+    if (!list) return;
+
     list.innerHTML = '';
 
     if (!this.highlights.length) {
       this.setStatus('statusEmpty');
-      clearBtn.disabled = true;
-      exportMdBtn.disabled = true;
+      if (clearBtn) clearBtn.disabled = true;
+      if (exportMdBtn) exportMdBtn.disabled = true;
       list.hidden = true;
       return;
     }
 
     this.clearStatus();
     list.hidden = false;
-    clearBtn.disabled = false;
-    exportMdBtn.disabled = false;
+    if (clearBtn) clearBtn.disabled = false;
+    if (exportMdBtn) exportMdBtn.disabled = false;
 
     const sorted = [...this.highlights].sort((a, b) => b.createdAt - a.createdAt);
 
@@ -320,55 +339,87 @@ class PopupController {
   }
 
   disableAll() {
-    this.elements.clearBtn.disabled = true;
-    this.elements.exportMdBtn.disabled = true;
-    this.elements.exportPdfBtn.disabled = true;
+    if (this.elements.clearBtn) this.elements.clearBtn.disabled = true;
+    if (this.elements.exportMdBtn) this.elements.exportMdBtn.disabled = true;
+    if (this.elements.exportPdfBtn) this.elements.exportPdfBtn.disabled = true;
   }
 
   setStatus(key) {
     this.statusKey = key;
-    this.elements.status.hidden = false;
-    this.elements.status.textContent = STRINGS[key] || key;
+    if (this.elements.status) {
+      this.elements.status.hidden = false;
+      this.elements.status.textContent = STRINGS[key] || key;
+    }
   }
 
   clearStatus() {
     this.statusKey = null;
-    this.elements.status.hidden = true;
-    this.elements.status.textContent = '';
+    if (this.elements.status) {
+      this.elements.status.hidden = true;
+      this.elements.status.textContent = '';
+    }
   }
 
   getActiveTab() {
-    if (typeof browser !== 'undefined' && browser.tabs?.query) {
-      return browser.tabs.query({ active: true, currentWindow: true }).then((tabs) => tabs[0]);
+    if (typeof chrome === 'undefined' || !chrome.tabs?.query) {
+      return Promise.resolve(null);
     }
-    if (typeof chrome !== 'undefined' && chrome.tabs?.query) {
-      return new Promise((resolve, reject) => {
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-          if (chrome.runtime?.lastError) reject(chrome.runtime.lastError);
-          else resolve(tabs[0]);
-        });
+    return new Promise((resolve, reject) => {
+      chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+        if (chrome.runtime?.lastError) reject(chrome.runtime.lastError);
+        else resolve(tabs[0]);
       });
+    });
+  }
+
+  async checkContentScriptReady() {
+    if (!this.tabId || typeof chrome === 'undefined' || !chrome.tabs?.sendMessage) {
+      return false;
     }
-    return Promise.resolve(null);
+
+    // Try to ping content script, retry up to 3 times
+    for (let i = 0; i < 3; i++) {
+      try {
+        const msg = { type: 'tenati:ping' };
+        await new Promise((resolve, reject) => {
+          chrome.tabs.sendMessage(this.tabId, msg, (res) => {
+            if (chrome.runtime?.lastError) {
+              reject(chrome.runtime.lastError);
+            } else {
+              resolve(res);
+            }
+          });
+        });
+        return true;
+      } catch (err) {
+        if (i < 2) {
+          // Wait a bit before retrying
+          await new Promise(resolve => setTimeout(resolve, 100));
+        } else {
+          console.warn('[tenati] Content script not ready after retries:', err);
+        }
+      }
+    }
+    return false;
   }
 
   sendCommand(command, payload = {}) {
     if (!this.tabId) return Promise.reject(new Error('No tab'));
+    if (typeof chrome === 'undefined' || !chrome.tabs?.sendMessage) {
+      return Promise.reject(new Error('Chrome API not available'));
+    }
 
     const msg = { type: 'tenati:popup', command, payload };
-
-    if (typeof browser !== 'undefined' && browser.tabs?.sendMessage) {
-      return browser.tabs.sendMessage(this.tabId, msg);
-    }
-    if (typeof chrome !== 'undefined' && chrome.tabs?.sendMessage) {
-      return new Promise((resolve, reject) => {
-        chrome.tabs.sendMessage(this.tabId, msg, (res) => {
-          if (chrome.runtime?.lastError) reject(chrome.runtime.lastError);
-          else resolve(res);
-        });
+    return new Promise((resolve, reject) => {
+      chrome.tabs.sendMessage(this.tabId, msg, (res) => {
+        if (chrome.runtime?.lastError) {
+          const error = chrome.runtime.lastError.message || chrome.runtime.lastError;
+          reject(new Error(`Message failed: ${error}`));
+        } else {
+          resolve(res);
+        }
       });
-    }
-    return Promise.reject(new Error('No messaging API'));
+    });
   }
 }
 

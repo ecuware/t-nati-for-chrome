@@ -9,7 +9,11 @@
     "48": "logo.svg",
     "128": "logo.svg"
   },
-  "permissions": ["tabs", "storage"],
+  "permissions": ["tabs", "storage", "scripting"],
+  "host_permissions": [
+    "http://*/*",
+    "https://*/*"
+  ],
   "action": {
     "default_title": "ténati highlights",
     "default_icon": {
@@ -27,7 +31,8 @@
       ],
       "js": ["scripts/highlighter.js"],
       "css": ["styles/panel.css"],
-      "run_at": "document_idle"
+      "run_at": "document_idle",
+      "all_frames": false
     }
   ]
 }

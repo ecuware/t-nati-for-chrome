@@ -555,11 +555,16 @@
     }
 
     setupBridge() {
-      const runtime = typeof browser !== 'undefined' ? browser.runtime : (typeof chrome !== 'undefined' ? chrome.runtime : null);
-      if (!runtime?.onMessage?.addListener) return;
+      if (typeof chrome === 'undefined' || !chrome.runtime?.onMessage?.addListener) return;
 
-      runtime.onMessage.addListener((msg, sender, respond) => {
-        if (msg?.type !== 'tenati:popup') return;
+      chrome.runtime.onMessage.addListener((msg, sender, respond) => {
+        // Handle ping messages to check if content script is ready
+        if (msg?.type === 'tenati:ping') {
+          respond({ ready: true });
+          return false;
+        }
+
+        if (msg?.type !== 'tenati:popup') return false;
 
         const handle = async () => {
           const { command, payload = {} } = msg;
@@ -589,6 +594,7 @@
           console.warn('[tenati] Bridge error:', err);
           respond({ ok: false, error: err?.message });
         });
+        // Chrome Manifest v3 requires returning true for async responses
         return true;
       });
     }
@@ -678,22 +684,17 @@
     }
 
     createStorage() {
-      if (typeof browser !== 'undefined' && browser.storage?.local) {
+      if (typeof chrome === 'undefined' || !chrome.storage?.local) {
+        // Fallback to memory storage if Chrome API is not available
+        const mem = {};
         return {
-          get: (key) => browser.storage.local.get(key).then((r) => r[key]),
-          set: (key, val) => browser.storage.local.set({ [key]: val }),
+          get: (key) => Promise.resolve(mem[key]),
+          set: (key, val) => Promise.resolve((mem[key] = val)),
         };
       }
-      if (typeof chrome !== 'undefined' && chrome.storage?.local) {
-        return {
-          get: (key) => new Promise((r) => chrome.storage.local.get(key, (res) => r(res[key]))),
-          set: (key, val) => new Promise((r) => chrome.storage.local.set({ [key]: val }, r)),
-        };
-      }
-      const mem = {};
       return {
-        get: (key) => Promise.resolve(mem[key]),
-        set: (key, val) => Promise.resolve((mem[key] = val)),
+        get: (key) => new Promise((r) => chrome.storage.local.get(key, (res) => r(res[key]))),
+        set: (key, val) => new Promise((r) => chrome.storage.local.set({ [key]: val }, r)),
       };
     }
   }
