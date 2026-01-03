@@ -36,13 +36,84 @@
       this.markCache = new Map();
       this.storage = this.createStorage();
       this.elements = {};
+      this.eventHandlers = [];
+      this.isDestroyed = false;
+      this.loadingState = false;
+      this.settings = {
+        defaultColor: '',
+        autoHighlight: false,
+        animationSpeed: 'normal',
+      };
     }
 
     async init() {
       this.createUI();
       this.bindEvents();
+      this.setupCleanup();
+      await this.loadSettings();
       await this.loadHighlights();
       this.setupBridge();
+    }
+
+    async loadSettings() {
+      try {
+        const result = await chrome.storage.sync.get(['tenatiSettings']);
+        if (result.tenatiSettings) {
+          this.settings = result.tenatiSettings;
+        }
+      } catch (err) {
+        console.warn('[tenati] Failed to load settings:', err);
+      }
+    }
+
+    setupCleanup() {
+      // Cleanup on page unload
+      window.addEventListener('beforeunload', () => {
+        this.destroy();
+      });
+
+      // Cleanup on visibility change
+      document.addEventListener('visibilitychange', () => {
+        if (document.hidden) {
+          this.cleanupTimers();
+        }
+      });
+    }
+
+    cleanupTimers() {
+      if (this.hoverTimer) {
+        clearTimeout(this.hoverTimer);
+        this.hoverTimer = null;
+      }
+      if (this.saveTimer) {
+        clearTimeout(this.saveTimer);
+        this.saveTimer = null;
+      }
+    }
+
+    destroy() {
+      if (this.isDestroyed) return;
+      this.isDestroyed = true;
+
+      // Cleanup timers
+      this.cleanupTimers();
+
+      // Clear cache
+      this.markCache.clear();
+
+      // Remove event listeners
+      this.eventHandlers.forEach(({ element, event, handler }) => {
+        element.removeEventListener(event, handler);
+      });
+      this.eventHandlers = [];
+
+      // Clear highlights from DOM
+      this.highlights.forEach((h) => this.removeMarks(h.id));
+
+      // Save pending changes
+      if (this.pendingSave) {
+        this.storage.set(PAGE_KEY, this.highlights).catch(() => {});
+      }
     }
 
     createUI() {
@@ -150,14 +221,18 @@
         this.hideBubble();
       }, 100);
 
-      document.addEventListener('scroll', handleScroll, { passive: true });
+      const scrollHandler = (e) => handleScroll(e);
+      document.addEventListener('scroll', scrollHandler, { passive: true });
+      this.eventHandlers.push({ element: document, event: 'scroll', handler: scrollHandler });
 
       const handleResize = this.throttle(() => {
         this.hideBubble();
         if (panel.classList.contains('tenati-panel-open')) this.positionPanel();
       }, 150);
 
-      window.addEventListener('resize', handleResize);
+      const resizeHandler = () => handleResize();
+      window.addEventListener('resize', resizeHandler);
+      this.eventHandlers.push({ element: window, event: 'resize', handler: resizeHandler });
 
       const handleSelection = this.debounce(() => {
         const sel = window.getSelection();
@@ -200,11 +275,20 @@
     }
 
     async loadHighlights() {
+      this.setLoadingState(true);
       try {
         const stored = await this.storage.get(PAGE_KEY);
-        if (Array.isArray(stored)) this.highlights = stored;
+        if (Array.isArray(stored)) {
+          // Sanitize stored data
+          this.highlights = stored.map((entry) => ({
+            ...entry,
+            textSnippet: this.sanitizeHTML(entry.textSnippet || ''),
+          }));
+        }
       } catch (err) {
         console.warn('[tenati] Load failed:', err);
+      } finally {
+        this.setLoadingState(false);
       }
 
       if (!this.highlights.length) return;
@@ -219,6 +303,7 @@
       let restoredCount = 0;
       const maxInitialRestore = 50; // İlk yüklemede maksimum restore sayısı
 
+      this.setLoadingState(true);
       for (const entry of this.highlights) {
         // İlk 50 highlight'ı hemen restore et, sonrasını lazy load
         if (restoredCount < maxInitialRestore) {
@@ -231,6 +316,7 @@
           break;
         }
       }
+      this.setLoadingState(false);
 
       // Lazy load remaining highlights
       if (this.highlights.length > maxInitialRestore) {
@@ -529,14 +615,87 @@
       this.saveTimer = setTimeout(async () => {
         if (this.pendingSave) {
           try {
+            // Check storage quota before saving
+            const quotaInfo = await this.checkStorageQuota();
+            if (!quotaInfo.hasSpace) {
+              await this.handleStorageQuotaExceeded();
+              return;
+            }
+
             await this.storage.set(PAGE_KEY, this.highlights);
             this.pendingSave = false;
           } catch (err) {
-            console.warn('[tenati] Save failed:', err);
+            if (err.message && err.message.includes('QUOTA_BYTES')) {
+              await this.handleStorageQuotaExceeded();
+            } else {
+              console.warn('[tenati] Save failed:', err);
+            }
             this.pendingSave = false;
           }
         }
       }, 300);
+    }
+
+    async checkStorageQuota() {
+      if (typeof chrome === 'undefined' || !chrome.storage?.local) {
+        return { hasSpace: true, used: 0, quota: 0 };
+      }
+
+      try {
+        const usage = await new Promise((resolve) => {
+          chrome.storage.local.getBytesInUse(null, (bytes) => {
+            if (chrome.runtime.lastError) {
+              resolve({ used: 0, quota: 0 });
+            } else {
+              resolve({ used: bytes, quota: chrome.storage.local.QUOTA_BYTES || 5242880 });
+            }
+          });
+        });
+
+        const quota = chrome.storage.local.QUOTA_BYTES || 5242880; // 5MB default
+        const hasSpace = usage.used < quota * 0.9; // Use 90% threshold
+
+        return { hasSpace, used: usage.used, quota };
+      } catch (err) {
+        return { hasSpace: true, used: 0, quota: 0 };
+      }
+    }
+
+    async handleStorageQuotaExceeded() {
+      // Remove oldest highlights (keep last 1000)
+      if (this.highlights.length > 1000) {
+        const sorted = [...this.highlights].sort((a, b) => a.createdAt - b.createdAt);
+        const toRemove = sorted.slice(0, this.highlights.length - 1000);
+        
+        toRemove.forEach((entry) => {
+          this.removeMarks(entry.id);
+          this.invalidateCache(entry.id);
+        });
+
+        this.highlights = sorted.slice(this.highlights.length - 1000);
+        
+        try {
+          await this.storage.set(PAGE_KEY, this.highlights);
+          this.pendingSave = false;
+        } catch (err) {
+          console.warn('[tenati] Cleanup save failed:', err);
+        }
+      }
+    }
+
+    sanitizeHTML(html) {
+      if (!html) return '';
+      
+      const div = document.createElement('div');
+      div.textContent = html;
+      return div.innerHTML;
+    }
+
+    setLoadingState(loading) {
+      this.loadingState = loading;
+      if (this.elements.root) {
+        this.elements.root.classList.toggle('tenati-loading', loading);
+      }
     }
 
     setEditing(id) {
@@ -665,6 +824,24 @@
           return false;
         }
 
+        // Handle settings updates
+        if (msg?.type === 'tenati:settingsUpdated') {
+          this.loadSettings();
+          return false;
+        }
+
+        // Handle clear all
+        if (msg?.type === 'tenati:clearAll') {
+          this.clearAllHighlights();
+          return false;
+        }
+
+        // Handle reload
+        if (msg?.type === 'tenati:reload') {
+          this.loadHighlights();
+          return false;
+        }
+
         if (msg?.type !== 'tenati:popup') return false;
 
         const handle = async () => {
@@ -707,12 +884,13 @@
           this.invalidateCache(entry.id);
           marks = this.getMarks(entry.id);
         }
+        const htmlContent = Array.from(marks).map((m) => m.innerHTML).join(' ') || entry.textSnippet || '';
         return {
           id: entry.id,
           color: entry.color,
-          textSnippet: entry.textSnippet,
+          textSnippet: this.sanitizeHTML(entry.textSnippet),
           createdAt: entry.createdAt,
-          htmlContent: Array.from(marks).map((m) => m.innerHTML).join(' ') || entry.textSnippet || '',
+          htmlContent: this.sanitizeHTML(htmlContent),
         };
       });
     }

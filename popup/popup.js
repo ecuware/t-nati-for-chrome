@@ -41,12 +41,31 @@ const STRINGS = {
 class PopupController {
   constructor() {
     this.elements = {
+      // Tabs
+      tabHighlights: document.getElementById('tabHighlights'),
+      tabSettings: document.getElementById('tabSettings'),
+      viewHighlights: document.getElementById('viewHighlights'),
+      viewSettings: document.getElementById('viewSettings'),
+      // Highlights view
       list: document.getElementById('highlightList'),
       status: document.getElementById('status'),
       clearBtn: document.getElementById('clearButton'),
       urlLabel: document.getElementById('popup-url'),
       exportMdBtn: document.getElementById('exportHighlightsButton'),
       exportPdfBtn: document.getElementById('exportPageButton'),
+      // Settings view
+      defaultColor: document.getElementById('defaultColor'),
+      autoHighlight: document.getElementById('autoHighlight'),
+      theme: document.getElementById('theme'),
+      animationSpeed: document.getElementById('animationSpeed'),
+      storageBar: document.getElementById('storageBar'),
+      storageText: document.getElementById('storageText'),
+      clearAllData: document.getElementById('clearAllData'),
+      exportData: document.getElementById('exportData'),
+      importData: document.getElementById('importData'),
+      importFile: document.getElementById('importFile'),
+      saveButton: document.getElementById('saveButton'),
+      saveStatus: document.getElementById('saveStatus'),
     };
 
     this.tabId = null;
@@ -54,12 +73,21 @@ class PopupController {
     this.tabTitle = '';
     this.highlights = [];
     this.statusKey = null;
+    this.currentView = 'highlights';
+    this.settings = {
+      defaultColor: '',
+      autoHighlight: false,
+      theme: 'dark',
+      animationSpeed: 'normal',
+    };
   }
 
   async init() {
     try {
       this.bindEvents();
+      await this.loadSettings();
       await this.loadTab();
+      await this.updateStorageInfo();
     } catch (err) {
       console.warn('[tenati] Init failed:', err);
       this.setStatus('statusTabReadFailed');
@@ -67,9 +95,248 @@ class PopupController {
   }
 
   bindEvents() {
+    // Tab switching
+    this.elements.tabHighlights.addEventListener('click', () => this.switchView('highlights'));
+    this.elements.tabSettings.addEventListener('click', () => this.switchView('settings'));
+
+    // Highlights view events
     this.elements.clearBtn.addEventListener('click', () => this.clearAll());
     this.elements.exportMdBtn.addEventListener('click', () => this.exportMarkdown());
     this.elements.exportPdfBtn.addEventListener('click', () => this.exportPdf());
+
+    // Settings view events
+    this.elements.saveButton.addEventListener('click', () => this.saveSettings());
+    this.elements.clearAllData.addEventListener('click', () => this.clearAllData());
+    this.elements.exportData.addEventListener('click', () => this.exportData());
+    this.elements.importData.addEventListener('click', () => this.elements.importFile.click());
+    this.elements.importFile.addEventListener('change', (e) => this.importData(e));
+    if (this.elements.theme) {
+      this.elements.theme.addEventListener('change', (e) => {
+        this.applyTheme(e.target.value);
+      });
+    }
+  }
+
+  switchView(view) {
+    this.currentView = view;
+
+    // Update tabs
+    this.elements.tabHighlights.classList.toggle('popup-tab--active', view === 'highlights');
+    this.elements.tabSettings.classList.toggle('popup-tab--active', view === 'settings');
+
+    // Update views
+    this.elements.viewHighlights.classList.toggle('popup-view--active', view === 'highlights');
+    this.elements.viewSettings.classList.toggle('popup-view--active', view === 'settings');
+
+    // Update storage info when switching to settings
+    if (view === 'settings') {
+      this.updateStorageInfo();
+    }
+  }
+
+  async loadSettings() {
+    try {
+      const result = await chrome.storage.sync.get(['tenatiSettings']);
+      if (result.tenatiSettings) {
+        this.settings = { ...this.settings, ...result.tenatiSettings };
+      }
+      this.renderSettings();
+    } catch (err) {
+      console.warn('[tenati] Failed to load settings:', err);
+    }
+  }
+
+  renderSettings() {
+    if (this.elements.defaultColor) this.elements.defaultColor.value = this.settings.defaultColor || '';
+    if (this.elements.autoHighlight) this.elements.autoHighlight.checked = this.settings.autoHighlight || false;
+    if (this.elements.theme) this.elements.theme.value = this.settings.theme || 'dark';
+    if (this.elements.animationSpeed) this.elements.animationSpeed.value = this.settings.animationSpeed || 'normal';
+    this.applyTheme(this.settings.theme || 'dark');
+  }
+
+  async saveSettings() {
+    this.settings = {
+      defaultColor: this.elements.defaultColor.value,
+      autoHighlight: this.elements.autoHighlight.checked,
+      theme: this.elements.theme.value,
+      animationSpeed: this.elements.animationSpeed.value,
+    };
+
+    this.applyTheme(this.settings.theme);
+
+    try {
+      await chrome.storage.sync.set({ tenatiSettings: this.settings });
+      this.showSettingsStatus('Settings saved!', true);
+      
+      // Notify content scripts to reload settings
+      chrome.tabs.query({}, (tabs) => {
+        tabs.forEach((tab) => {
+          chrome.tabs.sendMessage(tab.id, { type: 'tenati:settingsUpdated' }).catch(() => {});
+        });
+      });
+    } catch (err) {
+      console.error('[tenati] Failed to save settings:', err);
+      this.showSettingsStatus('Failed to save settings', false);
+    }
+  }
+
+  showSettingsStatus(message, success = true) {
+    if (!this.elements.saveStatus) return;
+    this.elements.saveStatus.textContent = message;
+    this.elements.saveStatus.className = `popup-settings-status ${success ? 'show' : 'show error'}`;
+    
+    setTimeout(() => {
+      this.elements.saveStatus.classList.remove('show');
+    }, 3000);
+  }
+
+  async updateStorageInfo() {
+    if (!this.elements.storageBar || !this.elements.storageText) return;
+
+    try {
+      const usage = await new Promise((resolve) => {
+        chrome.storage.local.getBytesInUse(null, (bytes) => {
+          if (chrome.runtime.lastError) {
+            resolve({ used: 0, quota: 0 });
+          } else {
+            const quota = chrome.storage.local.QUOTA_BYTES || 5242880;
+            resolve({ used: bytes, quota });
+          }
+        });
+      });
+
+      const percentage = usage.quota > 0 ? (usage.used / usage.quota) * 100 : 0;
+      const usedMB = (usage.used / 1024 / 1024).toFixed(2);
+      const quotaMB = (usage.quota / 1024 / 1024).toFixed(2);
+
+      this.elements.storageBar.style.width = `${Math.min(percentage, 100)}%`;
+      this.elements.storageText.textContent = `${usedMB} MB / ${quotaMB} MB (${percentage.toFixed(1)}%)`;
+
+      if (percentage > 90) {
+        this.elements.storageBar.style.background = 'linear-gradient(90deg, #ff6b6b 0%, #ff8585 100%)';
+      } else if (percentage > 70) {
+        this.elements.storageBar.style.background = 'linear-gradient(90deg, #ffa94d 0%, #ffb84d 100%)';
+      } else {
+        this.elements.storageBar.style.background = 'linear-gradient(90deg, var(--accent) 0%, var(--accent-hover) 100%)';
+      }
+    } catch (err) {
+      console.warn('[tenati] Failed to get storage info:', err);
+      if (this.elements.storageText) {
+        this.elements.storageText.textContent = 'Unable to calculate storage usage';
+      }
+    }
+  }
+
+  async clearAllData() {
+    if (!confirm('Are you sure you want to delete ALL highlights from ALL pages? This action cannot be undone.')) {
+      return;
+    }
+
+    try {
+      const allData = await chrome.storage.local.get(null);
+      const tenatiKeys = Object.keys(allData).filter(key => key.startsWith('tenati::'));
+      
+      await chrome.storage.local.remove(tenatiKeys);
+      
+      this.showSettingsStatus('All highlights cleared!', true);
+      await this.updateStorageInfo();
+      
+      chrome.tabs.query({}, (tabs) => {
+        tabs.forEach((tab) => {
+          chrome.tabs.sendMessage(tab.id, { type: 'tenati:clearAll' }).catch(() => {});
+        });
+      });
+    } catch (err) {
+      console.error('[tenati] Failed to clear data:', err);
+      this.showSettingsStatus('Failed to clear data', false);
+    }
+  }
+
+  async exportData() {
+    try {
+      const allData = await chrome.storage.local.get(null);
+      const tenatiData = {};
+      
+      Object.keys(allData).forEach(key => {
+        if (key.startsWith('tenati::')) {
+          tenatiData[key] = allData[key];
+        }
+      });
+
+      const blob = new Blob([JSON.stringify(tenatiData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `tenati-backup-${new Date().toISOString().split('T')[0]}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      this.showSettingsStatus('Data exported!', true);
+    } catch (err) {
+      console.error('[tenati] Failed to export data:', err);
+      this.showSettingsStatus('Failed to export data', false);
+    }
+  }
+
+  async importData(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+
+      const isValid = Object.keys(data).every(key => key.startsWith('tenati::'));
+      if (!isValid) {
+        throw new Error('Invalid data format');
+      }
+
+      if (!confirm(`This will import ${Object.keys(data).length} highlight entries. Continue?`)) {
+        return;
+      }
+
+      await chrome.storage.local.set(data);
+      this.showSettingsStatus('Data imported!', true);
+      await this.updateStorageInfo();
+
+      chrome.tabs.query({}, (tabs) => {
+        tabs.forEach((tab) => {
+          chrome.tabs.sendMessage(tab.id, { type: 'tenati:reload' }).catch(() => {});
+        });
+      });
+    } catch (err) {
+      console.error('[tenati] Failed to import data:', err);
+      this.showSettingsStatus('Failed to import data. Please check the file format.', false);
+    } finally {
+      event.target.value = '';
+    }
+  }
+
+  applyTheme(theme) {
+    const root = document.documentElement;
+    if (theme === 'light') {
+      root.style.setProperty('--bg-primary', '#ffffff');
+      root.style.setProperty('--bg-secondary', '#f5f5f5');
+      root.style.setProperty('--bg-tertiary', '#e8e8e8');
+      root.style.setProperty('--bg-hover', '#e0e0e0');
+      root.style.setProperty('--text-primary', '#1a1a1a');
+      root.style.setProperty('--text-secondary', '#666666');
+      root.style.setProperty('--text-muted', '#999999');
+      root.style.setProperty('--border-subtle', 'rgba(0, 0, 0, 0.1)');
+      root.style.setProperty('--border-hover', 'rgba(0, 0, 0, 0.2)');
+    } else {
+      root.style.setProperty('--bg-primary', '#0f0f12');
+      root.style.setProperty('--bg-secondary', '#18181d');
+      root.style.setProperty('--bg-tertiary', '#222228');
+      root.style.setProperty('--bg-hover', '#2a2a32');
+      root.style.setProperty('--text-primary', '#f4f4f7');
+      root.style.setProperty('--text-secondary', '#a0a0b0');
+      root.style.setProperty('--text-muted', '#6b6b7a');
+      root.style.setProperty('--border-subtle', 'rgba(255, 255, 255, 0.08)');
+      root.style.setProperty('--border-hover', 'rgba(255, 255, 255, 0.15)');
+    }
   }
 
   async loadTab() {

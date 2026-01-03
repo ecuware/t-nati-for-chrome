@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>ténati Settings</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <div class="options-container">
+      <header class="options-header">
+        <h1 class="options-title">ténati Settings</h1>
+        <p class="options-subtitle">Customize your highlighting experience</p>
+      </header>
+
+      <main class="options-content">
+        <section class="options-section">
+          <h2 class="options-section-title">General</h2>
+          
+          <div class="options-group">
+            <label class="options-label">
+              <span class="options-label-text">Default Highlight Color</span>
+              <select id="defaultColor" class="options-select">
+                <option value="">None (show panel)</option>
+                <option value="#FFD3B6">Apricot</option>
+                <option value="#FFAAA5">Coral</option>
+                <option value="#C5E1A5">Pistachio</option>
+                <option value="#B2DFDB">Mint</option>
+                <option value="#C7CEEA">Periwinkle</option>
+                <option value="#D7C0F7">Lavender</option>
+              </select>
+            </label>
+          </div>
+
+          <div class="options-group">
+            <label class="options-label options-checkbox">
+              <input type="checkbox" id="autoHighlight" class="options-checkbox-input" />
+              <span class="options-label-text">Auto-highlight on selection (skip panel)</span>
+            </label>
+          </div>
+        </section>
+
+        <section class="options-section">
+          <h2 class="options-section-title">Storage</h2>
+          
+          <div class="options-group">
+            <div class="options-storage-info">
+              <div class="options-storage-label">Storage Usage</div>
+              <div class="options-storage-bar">
+                <div id="storageBar" class="options-storage-bar-fill"></div>
+              </div>
+              <div id="storageText" class="options-storage-text">Calculating...</div>
+            </div>
+          </div>
+
+          <div class="options-group">
+            <button id="clearAllData" class="options-btn options-btn--danger">
+              Clear All Highlights
+            </button>
+            <p class="options-help">This will remove all highlights from all pages. This action cannot be undone.</p>
+          </div>
+
+          <div class="options-group">
+            <button id="exportData" class="options-btn">
+              Export All Data
+            </button>
+            <button id="importData" class="options-btn">
+              Import Data
+            </button>
+            <input type="file" id="importFile" accept=".json" style="display: none;" />
+            <p class="options-help">Backup or restore all your highlights</p>
+          </div>
+        </section>
+
+        <section class="options-section">
+          <h2 class="options-section-title">Appearance</h2>
+          
+          <div class="options-group">
+            <label class="options-label options-checkbox">
+              <input type="checkbox" id="darkMode" class="options-checkbox-input" />
+              <span class="options-label-text">Use dark mode (if available)</span>
+            </label>
+          </div>
+
+          <div class="options-group">
+            <label class="options-label">
+              <span class="options-label-text">Animation Speed</span>
+              <select id="animationSpeed" class="options-select">
+                <option value="fast">Fast</option>
+                <option value="normal" selected>Normal</option>
+                <option value="slow">Slow</option>
+                <option value="none">None</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section class="options-section">
+          <h2 class="options-section-title">About</h2>
+          <div class="options-group">
+            <p class="options-about">
+              <strong>Version:</strong> 0.1.0<br>
+              <strong>Chrome Manifest:</strong> v3<br>
+              <a href="https://github.com/ecuware/t-nati-for-chrome" target="_blank" class="options-link">GitHub Repository</a>
+            </p>
+          </div>
+        </section>
+      </main>
+
+      <footer class="options-footer">
+        <button id="saveButton" class="options-btn options-btn--primary">Save Settings</button>
+        <div id="saveStatus" class="options-status"></div>
+      </footer>
+    </div>
+    <script src="options.js"></script>
+  </body>
+</html>
+
